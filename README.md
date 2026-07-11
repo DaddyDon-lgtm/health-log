@@ -28,6 +28,12 @@ lab reports (reference ranges, red/amber out-of-range flags).
   correction made directly in the Sheet itself (or synced in from another
   device) also gets pulled into the app on next refresh, as long as there's
   no unsynced local edit to that same entry in flight.
+- **Malformed-row guard**: if a cell in the `Entries` tab ever ends up with
+  stray text instead of a real reading (e.g. something pasted into the
+  wrong place), the sync endpoint silently skips that row rather than
+  showing it in the app as a broken "Invalid Date" entry.
+- **Last synced** time is shown next to the sync badge, so you can tell at
+  a glance whether sync last succeeded and roughly how long ago.
 - Hosted via GitHub Pages from this repo's root (`main` branch).
 
 ## Google Sheet sync

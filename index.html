@@ -193,6 +193,12 @@
   .sync-badge.pending{background:var(--amber-bg);color:var(--amber);}
   .sync-badge.off{background:transparent;color:var(--ink-faint);border:1px solid var(--hairline);}
   .sync-panel .hint{color:var(--ink-faint);font-size:11px;margin:8px 0 0;line-height:1.5;}
+  .last-synced{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10px;
+    color:var(--ink-faint);
+    margin-left:auto;
+  }
 
   .section-title{
     font-family:'Spectral', serif;
@@ -246,7 +252,7 @@
   <p class="subline">Readings</p>
 
   <details class="sync-panel" id="syncPanel">
-    <summary>Sync to Google Sheet <span class="sync-badge off" id="syncBadge">off</span></summary>
+    <summary>Sync to Google Sheet <span class="sync-badge off" id="syncBadge">off</span><span class="last-synced" id="lastSyncedText"></span></summary>
     <div class="field"><label for="s-url">Apps Script Web App URL</label><input type="url" id="s-url" placeholder="https://script.google.com/macros/s/…/exec"></div>
     <div class="field"><label for="s-secret">Shared secret</label><input type="text" id="s-secret" placeholder="matches SHARED_SECRET in the script"></div>
     <button type="button" id="syncSaveBtn">Save &amp; sync now</button>
@@ -513,10 +519,29 @@ function mergeRemoteEntries(remoteList){
   }
 }
 
+function getLastSynced(){
+  return localStorage.getItem('hh-last-synced');
+}
+
+function setLastSynced(iso){
+  localStorage.setItem('hh-last-synced', iso);
+}
+
 async function refreshFromSheet(){
   const remote = await fetchRemoteEntries();
-  if (remote) mergeRemoteEntries(remote);
+  if (remote){
+    mergeRemoteEntries(remote);
+    setLastSynced(new Date().toISOString());
+  }
   updateSyncBadge();
+}
+
+function updateLastSyncedText(){
+  const el = document.getElementById('lastSyncedText');
+  const iso = getLastSynced();
+  if (!iso){ el.textContent = ''; return; }
+  const d = new Date(iso);
+  el.textContent = 'last synced ' + d.toLocaleString(undefined, {month:'short', day:'numeric', hour:'numeric', minute:'2-digit'});
 }
 
 function updateSyncBadge(){
@@ -533,6 +558,7 @@ function updateSyncBadge(){
     badge.textContent = 'synced';
     badge.className = 'sync-badge';
   }
+  updateLastSyncedText();
 }
 
 function render(){

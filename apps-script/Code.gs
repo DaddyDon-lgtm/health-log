@@ -123,18 +123,34 @@ function readEntries_(sheet) {
     var r = values[i];
     if (!r[0]) continue; // skip blank rows
 
+    var date = formatDateCell_(r[0], tz);
+    var sys = toNumberOrNull_(r[2]);
+    var dia = toNumberOrNull_(r[3]);
+
+    // Guard against stray text ending up in a cell (e.g. someone pasting
+    // into the sheet by mistake instead of the script editor) — a real
+    // entry always has a proper date and both BP readings.
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    if (sys === null || dia === null) continue;
+
     out.push({
-      date: formatDateCell_(r[0], tz),
+      date: date,
       time: formatTimeCell_(r[1], tz),
-      sys: r[2] === '' ? null : Number(r[2]),
-      dia: r[3] === '' ? null : Number(r[3]),
-      pulse: r[4] === '' ? null : Number(r[4]),
-      weight: r[5] === '' ? null : Number(r[5]),
+      sys: sys,
+      dia: dia,
+      pulse: toNumberOrNull_(r[4]),
+      weight: toNumberOrNull_(r[5]),
       notes: r[6] || '',
       id: r[7] ? String(r[7]) : ''
     });
   }
   return out;
+}
+
+function toNumberOrNull_(v) {
+  if (v === '' || v === null || v === undefined) return null;
+  var n = Number(v);
+  return isNaN(n) ? null : n;
 }
 
 // Sheets auto-converts strings that look like dates/times into real Date

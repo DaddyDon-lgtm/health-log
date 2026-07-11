@@ -151,6 +151,12 @@
     width:100%;
   }
   button:hover{background:var(--sage);}
+  .btn-secondary{
+    background:transparent;
+    color:var(--ink-soft);
+    border:1px solid var(--hairline);
+  }
+  .btn-secondary:hover{background:var(--paper);color:var(--ink);}
 
   @media (max-width: 420px){
     .wrap{padding:20px 14px 48px;}
@@ -209,6 +215,21 @@
   .history{background:var(--paper-raised);border:1px solid var(--hairline);border-radius:2px;padding:8px 20px;}
   .history .specimen-row{font-size:13px;}
   .history .when{font-family:'IBM Plex Mono', monospace;font-size:11px;color:var(--ink-faint);}
+  .row-btn{
+    width:auto;
+    display:inline-block;
+    font-family:'IBM Plex Sans', sans-serif;
+    font-size:10px;
+    padding:2px 8px;
+    margin-left:6px;
+    background:transparent;
+    color:var(--ink-soft);
+    border:1px solid var(--hairline);
+    border-radius:10px;
+    cursor:pointer;
+  }
+  .row-btn:hover{background:var(--sage-bg);color:var(--sage);}
+  .row-btn.delete-btn:hover{background:var(--rust-bg);color:var(--rust);}
   .foot-note{
     font-size:11px;color:var(--ink-faint);margin-top:28px;line-height:1.6;
     border-top:1px solid var(--hairline);padding-top:14px;
@@ -238,7 +259,7 @@
   </div>
 
   <form id="entryForm">
-    <div class="form-title">New entry</div>
+    <div class="form-title" id="formTitle">New entry</div>
     <div class="grid2">
       <div class="field"><label for="f-date">Date</label><input type="date" id="f-date" required></div>
       <div class="field"><label for="f-time">Time</label><input type="time" id="f-time" required></div>
@@ -252,7 +273,8 @@
       <div class="field"><label for="f-weight">Weight</label><input type="number" step="0.1" id="f-weight" placeholder="kg"></div>
     </div>
     <div class="field"><label for="f-notes">Notes</label><textarea id="f-notes" placeholder="context — sleep, caffeine, stress"></textarea></div>
-    <button type="submit">Save entry</button>
+    <button type="submit" id="formSubmitBtn">Save entry</button>
+    <button type="button" id="cancelEditBtn" class="btn-secondary" style="display:none;margin-top:8px;">Cancel edit</button>
     <div class="save-note" id="saveNote"></div>
   </form>
 
@@ -296,6 +318,7 @@ const REFS = {
 };
 
 let entries = [];
+let editingId = null;
 
 function flagLevel(val, ref){
   if (ref.max !== undefined && val > ref.max) return val > ref.max * 1.1 ? 'rust' : 'amber';
@@ -315,12 +338,34 @@ function loadEntries(){
   }catch(e){
     entries = [];
   }
+  // migrate entries saved before remoteRowExists existed: a previously
+  // synced entry must already have a row on the sheet.
+  entries.forEach(e => { if (e.remoteRowExists === undefined) e.remoteRowExists = !!e.synced; });
   entries.sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
   render();
 }
 
 function saveEntries(){
   localStorage.setItem('hh-entries', JSON.stringify(entries));
+}
+
+function getPendingDeletes(){
+  try{
+    const raw = localStorage.getItem('hh-pending-deletes');
+    return raw ? JSON.parse(raw) : [];
+  }catch(e){
+    return [];
+  }
+}
+
+function setPendingDeletes(list){
+  localStorage.setItem('hh-pending-deletes', JSON.stringify(list));
+}
+
+function queueDelete(id){
+  const list = getPendingDeletes();
+  if (!list.includes(id)) list.push(id);
+  setPendingDeletes(list);
 }
 
 // --- Google Sheet sync -----------------------------------------------
@@ -338,7 +383,7 @@ function setSyncConfig(cfg){
   localStorage.setItem('hh-sync-config', JSON.stringify(cfg));
 }
 
-async function syncEntry(entry){
+async function syncEntry(entry, action){
   const cfg = getSyncConfig();
   if (!cfg || !cfg.url || !cfg.secret) return false;
   try{
@@ -348,6 +393,7 @@ async function syncEntry(entry){
       // the body is still parsed as JSON on the other end.
       headers: {'Content-Type': 'text/plain;charset=utf-8'},
       body: JSON.stringify({
+        action: action || 'append',
         id: entry.id, date: entry.date, time: entry.time,
         sys: entry.sys, dia: entry.dia, pulse: entry.pulse,
         weight: entry.weight, notes: entry.notes,
@@ -361,15 +407,43 @@ async function syncEntry(entry){
   }
 }
 
+async function syncDelete(id){
+  const cfg = getSyncConfig();
+  if (!cfg || !cfg.url || !cfg.secret) return false;
+  try{
+    const res = await fetch(cfg.url, {
+      method: 'POST',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({ action: 'delete', id, secret: cfg.secret })
+    });
+    const data = await res.json();
+    return data.status === 'ok';
+  }catch(e){
+    return false;
+  }
+}
+
 async function trySyncPending(){
   const cfg = getSyncConfig();
   if (!cfg || !cfg.url || !cfg.secret) { updateSyncBadge(); return; }
+
   const pending = entries.filter(e => !e.synced);
   for (const entry of pending){
-    const ok = await syncEntry(entry);
-    if (ok) entry.synced = true;
+    const ok = await syncEntry(entry, entry.remoteRowExists ? 'update' : 'append');
+    if (ok){ entry.synced = true; entry.remoteRowExists = true; }
   }
   if (pending.length) saveEntries();
+
+  const deletes = getPendingDeletes();
+  if (deletes.length){
+    const stillPending = [];
+    for (const id of deletes){
+      const ok = await syncDelete(id);
+      if (!ok) stillPending.push(id);
+    }
+    setPendingDeletes(stillPending);
+  }
+
   updateSyncBadge();
 }
 
@@ -397,19 +471,40 @@ async function fetchRemoteEntries(){
 }
 
 function mergeRemoteEntries(remoteList){
+  const remoteKeys = new Set(remoteList.map(keyFor));
   const byKey = new Map(entries.map(e => [keyFor(e), e]));
   let changed = false;
+
   for (const r of remoteList){
     const k = keyFor(r);
     const existing = byKey.get(k);
     if (!existing){
-      byKey.set(k, Object.assign({}, r, {synced: true}));
+      byKey.set(k, Object.assign({}, r, {synced: true, remoteRowExists: true}));
       changed = true;
-    } else if (!existing.synced){
-      existing.synced = true;
+    } else if (existing.synced){
+      // No unsynced local edit in flight, so the sheet is authoritative —
+      // this is what lets a correction made directly in the Sheet (or
+      // synced from another device) show up here.
+      const merged = Object.assign({}, existing, r, {synced: true, remoteRowExists: true});
+      if (JSON.stringify(merged) !== JSON.stringify(existing)){
+        byKey.set(k, merged);
+        changed = true;
+      }
+    }
+    // else: local has an unsynced edit pending — leave it alone, it'll
+    // overwrite the remote version once it successfully pushes.
+  }
+
+  // An entry that was previously confirmed on the sheet but no longer
+  // appears in the remote list was deleted (from this device or another) —
+  // drop it locally too, unless there's an unsynced local edit protecting it.
+  for (const [k, e] of byKey){
+    if (e.remoteRowExists && e.synced && !remoteKeys.has(k)){
+      byKey.delete(k);
       changed = true;
     }
   }
+
   if (changed){
     entries = Array.from(byKey.values());
     entries.sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
@@ -427,7 +522,7 @@ async function refreshFromSheet(){
 function updateSyncBadge(){
   const badge = document.getElementById('syncBadge');
   const cfg = getSyncConfig();
-  const pendingCount = entries.filter(e => !e.synced).length;
+  const pendingCount = entries.filter(e => !e.synced).length + getPendingDeletes().length;
   if (!cfg || !cfg.url || !cfg.secret){
     badge.textContent = 'off';
     badge.className = 'sync-badge off';
@@ -475,12 +570,72 @@ function renderHistory(){
   const recent = entries.slice().reverse().slice(0, 10);
   el.innerHTML = recent.map(e => {
     const flag = flagLevel(e.sys, REFS.sys) || flagLevel(e.dia, REFS.dia);
+    const actions = e.id ? `
+      <button type="button" class="row-btn edit-btn" data-id="${e.id}">Edit</button>
+      <button type="button" class="row-btn delete-btn" data-id="${e.id}">Delete</button>` : '';
     return `<div class="specimen-row">
       <span class="label">${fmtDate(e.date)} <span class="when">${e.time}</span></span>
-      <span class="val">${flag ? `<span class="flag-dot ${flag==='amber'?'amber':''}"></span>` : ''}${e.sys}/${e.dia}${e.weight ? ' · ' + e.weight + 'kg' : ''}</span>
+      <span class="val">${flag ? `<span class="flag-dot ${flag==='amber'?'amber':''}"></span>` : ''}${e.sys}/${e.dia}${e.weight ? ' · ' + e.weight + 'kg' : ''}${actions}</span>
     </div>`;
   }).join('');
 }
+
+function startEdit(id){
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+  editingId = id;
+  document.getElementById('f-date').value = entry.date;
+  document.getElementById('f-time').value = entry.time;
+  document.getElementById('f-sys').value = entry.sys;
+  document.getElementById('f-dia').value = entry.dia;
+  document.getElementById('f-pulse').value = entry.pulse || '';
+  document.getElementById('f-weight').value = entry.weight || '';
+  document.getElementById('f-notes').value = entry.notes || '';
+  document.getElementById('formTitle').textContent = 'Edit entry';
+  document.getElementById('formSubmitBtn').textContent = 'Update entry';
+  document.getElementById('cancelEditBtn').style.display = 'block';
+  document.getElementById('entryForm').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function cancelEdit(){
+  editingId = null;
+  document.getElementById('entryForm').reset();
+  const now = new Date();
+  document.getElementById('f-date').value = now.toISOString().slice(0,10);
+  document.getElementById('f-time').value = now.toTimeString().slice(0,5);
+  document.getElementById('formTitle').textContent = 'New entry';
+  document.getElementById('formSubmitBtn').textContent = 'Save entry';
+  document.getElementById('cancelEditBtn').style.display = 'none';
+}
+
+async function deleteEntry(id){
+  const entry = entries.find(e => e.id === id);
+  if (!entry) return;
+  if (!confirm(`Delete the ${fmtDate(entry.date)} ${entry.time} entry?`)) return;
+
+  entries = entries.filter(e => e.id !== id);
+  saveEntries();
+  render();
+  if (editingId === id) cancelEdit();
+
+  if (entry.remoteRowExists){
+    queueDelete(id);
+    const ok = await syncDelete(id);
+    if (ok){
+      setPendingDeletes(getPendingDeletes().filter(x => x !== id));
+    }
+    updateSyncBadge();
+  }
+}
+
+document.getElementById('historyList').addEventListener('click', (ev) => {
+  const editBtn = ev.target.closest('.edit-btn');
+  const delBtn = ev.target.closest('.delete-btn');
+  if (editBtn) startEdit(editBtn.dataset.id);
+  else if (delBtn) deleteEntry(delBtn.dataset.id);
+});
+
+document.getElementById('cancelEditBtn').addEventListener('click', cancelEdit);
 
 let bpChart, wtChart;
 function renderCharts(){
@@ -529,43 +684,63 @@ function renderCharts(){
 
 document.getElementById('entryForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
-  const entry = {
-    id: Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+  const saveNote = document.getElementById('saveNote');
+  const wasEditing = !!editingId;
+  const formValues = {
     date: document.getElementById('f-date').value,
     time: document.getElementById('f-time').value,
     sys: Number(document.getElementById('f-sys').value),
     dia: Number(document.getElementById('f-dia').value),
     pulse: document.getElementById('f-pulse').value ? Number(document.getElementById('f-pulse').value) : null,
     weight: document.getElementById('f-weight').value ? Number(document.getElementById('f-weight').value) : null,
-    notes: document.getElementById('f-notes').value,
-    synced: false
+    notes: document.getElementById('f-notes').value
   };
-  entries.push(entry);
+
+  let entry;
+  if (wasEditing){
+    entry = entries.find(e => e.id === editingId);
+    if (!entry){ cancelEdit(); return; }
+    Object.assign(entry, formValues);
+    entry.synced = false;
+  } else {
+    entry = Object.assign({
+      id: Date.now() + '-' + Math.random().toString(36).slice(2, 8),
+      synced: false,
+      remoteRowExists: false
+    }, formValues);
+    entries.push(entry);
+  }
+
   entries.sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
-  const saveNote = document.getElementById('saveNote');
   try{
     saveEntries();
-    saveNote.textContent = 'Entry saved.';
+    saveNote.textContent = wasEditing ? 'Entry updated.' : 'Entry saved.';
   }catch(e){
     saveNote.textContent = 'Could not save — storage unavailable.';
   }
   render();
-  ev.target.reset();
-  const now = new Date();
-  document.getElementById('f-date').value = now.toISOString().slice(0,10);
-  document.getElementById('f-time').value = now.toTimeString().slice(0,5);
 
   const cfg = getSyncConfig();
   if (cfg && cfg.url && cfg.secret){
-    const ok = await syncEntry(entry);
+    const ok = await syncEntry(entry, entry.remoteRowExists ? 'update' : 'append');
     if (ok){
       entry.synced = true;
+      entry.remoteRowExists = true;
       saveEntries();
-      saveNote.textContent = 'Entry saved · synced to sheet.';
+      saveNote.textContent = (wasEditing ? 'Entry updated' : 'Entry saved') + ' · synced to sheet.';
     } else {
-      saveNote.textContent = 'Entry saved · sync pending (will retry).';
+      saveNote.textContent = (wasEditing ? 'Entry updated' : 'Entry saved') + ' · sync pending (will retry).';
     }
     updateSyncBadge();
+  }
+
+  if (wasEditing){
+    cancelEdit();
+  } else {
+    ev.target.reset();
+    const now = new Date();
+    document.getElementById('f-date').value = now.toISOString().slice(0,10);
+    document.getElementById('f-time').value = now.toTimeString().slice(0,5);
   }
   setTimeout(() => saveNote.textContent = '', 3000);
 });

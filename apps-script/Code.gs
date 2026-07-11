@@ -2,9 +2,13 @@
  * Home Health Log — Apps Script sync endpoint.
  *
  * This does NOT run on GitHub Pages. It runs inside Google's servers, bound
- * to your Google Sheet. The static app POSTs new entries to it (action:
- * "append", the default) and also asks it for the full history (action:
- * "list") so that entries logged on one device show up on another.
+ * to your Google Sheet. The static app talks to it with a JSON body over
+ * POST, using an "action" field:
+ *   - "append" (default/omitted) — add a new row
+ *   - "update" — overwrite the row matching body.id (falls back to append
+ *     if no row with that id exists)
+ *   - "delete" — remove the row matching body.id
+ *   - "list"   — return every row as JSON, for cross-device sync
  *
  * Setup:
  * 1. Open the Google Sheet you want entries appended to.
@@ -29,7 +33,9 @@
  *
  * If you ever need to rotate the secret, change SHARED_SECRET here, re-Deploy
  * (Manage deployments > Edit > New version), and update the app's settings
- * to match.
+ * to match. IMPORTANT: if you ever paste a fresh copy of this whole file in
+ * to pick up updates, re-check that this line still has YOUR secret and not
+ * this placeholder — pasting the file wholesale overwrites it.
  */
 
 const SHARED_SECRET = 'PASTE_YOUR_OWN_RANDOM_SECRET_HERE';
@@ -53,23 +59,55 @@ function doPost(e) {
       return respond_({ status: 'ok', entries: readEntries_(sheet) });
     }
 
-    sheet.appendRow([
-      body.date || '',
-      body.time || '',
-      body.sys || '',
-      body.dia || '',
-      body.pulse || '',
-      body.weight || '',
-      body.notes || '',
-      body.id || '',
-      new Date()
-    ]);
+    if (body.action === 'update') {
+      var updateRow = findRowById_(sheet, body.id);
+      if (updateRow === -1) {
+        appendRow_(sheet, body);
+      } else {
+        sheet.getRange(updateRow, 1, 1, 9).setValues([rowValues_(body)]);
+      }
+      return respond_({ status: 'ok' });
+    }
 
+    if (body.action === 'delete') {
+      var deleteRow = findRowById_(sheet, body.id);
+      if (deleteRow !== -1) sheet.deleteRow(deleteRow);
+      return respond_({ status: 'ok' });
+    }
+
+    appendRow_(sheet, body);
     result = { status: 'ok' };
   } catch (err) {
     result = { status: 'error', message: err.message };
   }
   return respond_(result);
+}
+
+function rowValues_(body) {
+  return [
+    body.date || '',
+    body.time || '',
+    body.sys != null ? body.sys : '',
+    body.dia != null ? body.dia : '',
+    body.pulse != null ? body.pulse : '',
+    body.weight != null ? body.weight : '',
+    body.notes || '',
+    body.id || '',
+    new Date()
+  ];
+}
+
+function appendRow_(sheet, body) {
+  sheet.appendRow(rowValues_(body));
+}
+
+function findRowById_(sheet, id) {
+  if (!id) return -1;
+  var values = sheet.getDataRange().getValues();
+  for (var i = 0; i < values.length; i++) {
+    if (String(values[i][7]) === String(id)) return i + 1; // 1-based row index
+  }
+  return -1;
 }
 
 function readEntries_(sheet) {

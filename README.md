@@ -21,6 +21,13 @@ lab reports (reference ranges, red/amber out-of-range flags).
   offline), and on load — plus whenever you come back online — the app
   pulls the full entry list back from the Sheet and merges it in. That's
   what makes entries logged on one device show up on another.
+- **Edit / delete**: each row in "Recent entries" has Edit and Delete
+  buttons. Editing overwrites the same row on the Sheet (matched by a
+  hidden id) rather than creating a new one; deleting removes it there too.
+  Both queue and retry the same way as new entries if you're offline. A
+  correction made directly in the Sheet itself (or synced in from another
+  device) also gets pulled into the app on next refresh, as long as there's
+  no unsynced local edit to that same entry in flight.
 - Hosted via GitHub Pages from this repo's root (`main` branch).
 
 ## Google Sheet sync

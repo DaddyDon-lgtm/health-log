@@ -243,7 +243,7 @@
     <h1>Home Health Log</h1>
     <span class="date" id="todayDate"></span>
   </div>
-  <p class="subline">Morning readings</p>
+  <p class="subline">Readings</p>
 
   <details class="sync-panel" id="syncPanel">
     <summary>Sync to Google Sheet <span class="sync-badge off" id="syncBadge">off</span></summary>
@@ -255,7 +255,7 @@
 
   <div class="specimen" id="latestCard">
     <div class="specimen-title">Latest reading</div>
-    <div id="latestBody"><p class="empty-note">No entries yet. Log this morning's reading below.</p></div>
+    <div id="latestBody"><p class="empty-note">No entries yet. Log a reading below.</p></div>
   </div>
 
   <form id="entryForm">
@@ -545,7 +545,7 @@ function render(){
 function renderLatest(){
   const el = document.getElementById('latestBody');
   if (entries.length === 0){
-    el.innerHTML = '<p class="empty-note">No entries yet. Log this morning\'s reading below.</p>';
+    el.innerHTML = '<p class="empty-note">No entries yet. Log a reading below.</p>';
     return;
   }
   const e = entries[entries.length - 1];

@@ -14,11 +14,13 @@ lab reports (reference ranges, red/amber out-of-range flags).
 - `apps-script/Code.gs` — Google Apps Script source for the sync endpoint
   (see "Google Sheet sync" below). Not deployed automatically — you paste it
   into your own Sheet's script editor.
-- **Data storage: local-first.** Every entry is saved to the browser's
-  `localStorage` immediately, so the app works fully offline. If sync is
-  configured (see below), each entry is also POSTed to your Google Sheet in
-  the background; unsynced entries are queued and retried automatically when
-  you're back online.
+- **Data storage: local-first, two-way sync.** Every entry is saved to the
+  browser's `localStorage` immediately, so the app works fully offline. If
+  sync is configured (see below), each entry is also POSTed to your Google
+  Sheet in the background (queued and retried automatically if you're
+  offline), and on load — plus whenever you come back online — the app
+  pulls the full entry list back from the Sheet and merges it in. That's
+  what makes entries logged on one device show up on another.
 - Hosted via GitHub Pages from this repo's root (`main` branch).
 
 ## Google Sheet sync

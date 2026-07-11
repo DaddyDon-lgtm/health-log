@@ -283,7 +283,7 @@
   </div>
 
   <div class="foot-note">
-    Entries are always saved on this device first, then synced to your Google Sheet in the background when sync is configured and you're online. Reference ranges shown: BP &lt;130/85 mmHg, pulse 50–100 bpm. Not medical advice.
+    Entries are always saved on this device first, then synced to and from your Google Sheet in the background when sync is configured and you're online — so readings logged on another device show up here too. Reference ranges shown: BP &lt;130/85 mmHg, pulse 50–100 bpm. Not medical advice.
   </div>
 
 </div>
@@ -370,6 +370,57 @@ async function trySyncPending(){
     if (ok) entry.synced = true;
   }
   if (pending.length) saveEntries();
+  updateSyncBadge();
+}
+
+// A stable key for merging: prefer the app-assigned id, but fall back to a
+// composite of the readable fields so rows added by hand directly in the
+// Sheet (which have no id) still merge in without duplicating.
+function keyFor(e){
+  return e.id || [e.date, e.time, e.sys, e.dia, e.pulse, e.weight].join('|');
+}
+
+async function fetchRemoteEntries(){
+  const cfg = getSyncConfig();
+  if (!cfg || !cfg.url || !cfg.secret) return null;
+  try{
+    const res = await fetch(cfg.url, {
+      method: 'POST',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({ action: 'list', secret: cfg.secret })
+    });
+    const data = await res.json();
+    return (data.status === 'ok' && Array.isArray(data.entries)) ? data.entries : null;
+  }catch(e){
+    return null;
+  }
+}
+
+function mergeRemoteEntries(remoteList){
+  const byKey = new Map(entries.map(e => [keyFor(e), e]));
+  let changed = false;
+  for (const r of remoteList){
+    const k = keyFor(r);
+    const existing = byKey.get(k);
+    if (!existing){
+      byKey.set(k, Object.assign({}, r, {synced: true}));
+      changed = true;
+    } else if (!existing.synced){
+      existing.synced = true;
+      changed = true;
+    }
+  }
+  if (changed){
+    entries = Array.from(byKey.values());
+    entries.sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+    saveEntries();
+    render();
+  }
+}
+
+async function refreshFromSheet(){
+  const remote = await fetchRemoteEntries();
+  if (remote) mergeRemoteEntries(remote);
   updateSyncBadge();
 }
 
@@ -541,13 +592,14 @@ document.getElementById('syncSaveBtn').addEventListener('click', async () => {
   setSyncConfig({url, secret});
   hint.textContent = 'Saved. Syncing…';
   await trySyncPending();
+  await refreshFromSheet();
   hint.textContent = 'Sync settings saved.';
   setTimeout(() => hint.textContent = '', 3000);
 });
 
 loadEntries();
-trySyncPending();
-window.addEventListener('online', trySyncPending);
+trySyncPending().then(refreshFromSheet);
+window.addEventListener('online', () => trySyncPending().then(refreshFromSheet));
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

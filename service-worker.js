@@ -2,7 +2,7 @@
 // Caches the app shell so the page loads offline. Does NOT cache or sync
 // any logged data — entries stay in the browser's own storage (see index.html).
 
-const CACHE_NAME = 'health-log-shell-v1';
+const CACHE_NAME = 'health-log-shell-v2';
 const APP_SHELL = [
   './',
   './index.html',

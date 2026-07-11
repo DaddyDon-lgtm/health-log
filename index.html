@@ -159,6 +159,35 @@
   }
   .save-note{font-size:12px;color:var(--ink-soft);margin-top:8px;min-height:16px;}
 
+  .sync-panel{
+    background:var(--paper-raised);
+    border:1px solid var(--hairline);
+    border-radius:2px;
+    padding:14px 20px;
+    margin-bottom:24px;
+    font-size:13px;
+  }
+  .sync-panel summary{
+    cursor:pointer;
+    font-family:'IBM Plex Sans', sans-serif;
+    font-weight:500;
+    font-size:14px;
+    display:flex;align-items:center;gap:8px;
+    list-style:none;
+  }
+  .sync-panel summary::-webkit-details-marker{display:none;}
+  .sync-panel[open] summary{margin-bottom:14px;}
+  .sync-badge{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:10px;text-transform:uppercase;letter-spacing:0.06em;
+    color:var(--sage);
+    background:var(--sage-bg);
+    padding:2px 7px;border-radius:10px;
+  }
+  .sync-badge.pending{background:var(--amber-bg);color:var(--amber);}
+  .sync-badge.off{background:transparent;color:var(--ink-faint);border:1px solid var(--hairline);}
+  .sync-panel .hint{color:var(--ink-faint);font-size:11px;margin:8px 0 0;line-height:1.5;}
+
   .section-title{
     font-family:'Spectral', serif;
     font-size:16px;font-weight:600;
@@ -193,7 +222,15 @@
     <h1>Home Health Log</h1>
     <span class="date" id="todayDate"></span>
   </div>
-  <p class="subline">Morning readings — prototype, local device storage only</p>
+  <p class="subline">Morning readings</p>
+
+  <details class="sync-panel" id="syncPanel">
+    <summary>Sync to Google Sheet <span class="sync-badge off" id="syncBadge">off</span></summary>
+    <div class="field"><label for="s-url">Apps Script Web App URL</label><input type="url" id="s-url" placeholder="https://script.google.com/macros/s/…/exec"></div>
+    <div class="field"><label for="s-secret">Shared secret</label><input type="text" id="s-secret" placeholder="matches SHARED_SECRET in the script"></div>
+    <button type="button" id="syncSaveBtn">Save &amp; sync now</button>
+    <p class="hint" id="syncHint"></p>
+  </details>
 
   <div class="specimen" id="latestCard">
     <div class="specimen-title">Latest reading</div>
@@ -246,7 +283,7 @@
   </div>
 
   <div class="foot-note">
-    Prototype only — entries are stored locally in this browser session, not synced to your Home Health Log Google Sheet. Reference ranges shown: BP &lt;130/85 mmHg, pulse 50–100 bpm. Not medical advice.
+    Entries are always saved on this device first, then synced to your Google Sheet in the background when sync is configured and you're online. Reference ranges shown: BP &lt;130/85 mmHg, pulse 50–100 bpm. Not medical advice.
   </div>
 
 </div>
@@ -271,10 +308,10 @@ function fmtDate(d){
   return dt.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'});
 }
 
-async function loadEntries(){
+function loadEntries(){
   try{
-    const res = await window.storage.get('bp-entries', false);
-    entries = res ? JSON.parse(res.value) : [];
+    const raw = localStorage.getItem('hh-entries');
+    entries = raw ? JSON.parse(raw) : [];
   }catch(e){
     entries = [];
   }
@@ -282,14 +319,81 @@ async function loadEntries(){
   render();
 }
 
-async function saveEntries(){
-  await window.storage.set('bp-entries', JSON.stringify(entries), false);
+function saveEntries(){
+  localStorage.setItem('hh-entries', JSON.stringify(entries));
+}
+
+// --- Google Sheet sync -----------------------------------------------
+
+function getSyncConfig(){
+  try{
+    const raw = localStorage.getItem('hh-sync-config');
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){
+    return null;
+  }
+}
+
+function setSyncConfig(cfg){
+  localStorage.setItem('hh-sync-config', JSON.stringify(cfg));
+}
+
+async function syncEntry(entry){
+  const cfg = getSyncConfig();
+  if (!cfg || !cfg.url || !cfg.secret) return false;
+  try{
+    const res = await fetch(cfg.url, {
+      method: 'POST',
+      // text/plain avoids a CORS preflight against the Apps Script endpoint;
+      // the body is still parsed as JSON on the other end.
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify({
+        id: entry.id, date: entry.date, time: entry.time,
+        sys: entry.sys, dia: entry.dia, pulse: entry.pulse,
+        weight: entry.weight, notes: entry.notes,
+        secret: cfg.secret
+      })
+    });
+    const data = await res.json();
+    return data.status === 'ok';
+  }catch(e){
+    return false;
+  }
+}
+
+async function trySyncPending(){
+  const cfg = getSyncConfig();
+  if (!cfg || !cfg.url || !cfg.secret) { updateSyncBadge(); return; }
+  const pending = entries.filter(e => !e.synced);
+  for (const entry of pending){
+    const ok = await syncEntry(entry);
+    if (ok) entry.synced = true;
+  }
+  if (pending.length) saveEntries();
+  updateSyncBadge();
+}
+
+function updateSyncBadge(){
+  const badge = document.getElementById('syncBadge');
+  const cfg = getSyncConfig();
+  const pendingCount = entries.filter(e => !e.synced).length;
+  if (!cfg || !cfg.url || !cfg.secret){
+    badge.textContent = 'off';
+    badge.className = 'sync-badge off';
+  } else if (pendingCount > 0){
+    badge.textContent = pendingCount + ' pending';
+    badge.className = 'sync-badge pending';
+  } else {
+    badge.textContent = 'synced';
+    badge.className = 'sync-badge';
+  }
 }
 
 function render(){
   renderLatest();
   renderHistory();
   renderCharts();
+  updateSyncBadge();
 }
 
 function renderLatest(){
@@ -375,28 +479,44 @@ function renderCharts(){
 document.getElementById('entryForm').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const entry = {
+    id: Date.now() + '-' + Math.random().toString(36).slice(2, 8),
     date: document.getElementById('f-date').value,
     time: document.getElementById('f-time').value,
     sys: Number(document.getElementById('f-sys').value),
     dia: Number(document.getElementById('f-dia').value),
     pulse: document.getElementById('f-pulse').value ? Number(document.getElementById('f-pulse').value) : null,
     weight: document.getElementById('f-weight').value ? Number(document.getElementById('f-weight').value) : null,
-    notes: document.getElementById('f-notes').value
+    notes: document.getElementById('f-notes').value,
+    synced: false
   };
   entries.push(entry);
   entries.sort((a,b) => (a.date+a.time).localeCompare(b.date+b.time));
+  const saveNote = document.getElementById('saveNote');
   try{
-    await saveEntries();
-    document.getElementById('saveNote').textContent = 'Entry saved.';
+    saveEntries();
+    saveNote.textContent = 'Entry saved.';
   }catch(e){
-    document.getElementById('saveNote').textContent = 'Could not save — storage unavailable.';
+    saveNote.textContent = 'Could not save — storage unavailable.';
   }
   render();
   ev.target.reset();
   const now = new Date();
   document.getElementById('f-date').value = now.toISOString().slice(0,10);
   document.getElementById('f-time').value = now.toTimeString().slice(0,5);
-  setTimeout(() => document.getElementById('saveNote').textContent = '', 2500);
+
+  const cfg = getSyncConfig();
+  if (cfg && cfg.url && cfg.secret){
+    const ok = await syncEntry(entry);
+    if (ok){
+      entry.synced = true;
+      saveEntries();
+      saveNote.textContent = 'Entry saved · synced to sheet.';
+    } else {
+      saveNote.textContent = 'Entry saved · sync pending (will retry).';
+    }
+    updateSyncBadge();
+  }
+  setTimeout(() => saveNote.textContent = '', 3000);
 });
 
 const now = new Date();
@@ -404,7 +524,30 @@ document.getElementById('todayDate').textContent = now.toLocaleDateString(undefi
 document.getElementById('f-date').value = now.toISOString().slice(0,10);
 document.getElementById('f-time').value = now.toTimeString().slice(0,5);
 
+const existingCfg = getSyncConfig();
+if (existingCfg){
+  document.getElementById('s-url').value = existingCfg.url || '';
+  document.getElementById('s-secret').value = existingCfg.secret || '';
+}
+
+document.getElementById('syncSaveBtn').addEventListener('click', async () => {
+  const url = document.getElementById('s-url').value.trim();
+  const secret = document.getElementById('s-secret').value.trim();
+  const hint = document.getElementById('syncHint');
+  if (!url || !secret){
+    hint.textContent = 'Enter both the Web App URL and the shared secret.';
+    return;
+  }
+  setSyncConfig({url, secret});
+  hint.textContent = 'Saved. Syncing…';
+  await trySyncPending();
+  hint.textContent = 'Sync settings saved.';
+  setTimeout(() => hint.textContent = '', 3000);
+});
+
 loadEntries();
+trySyncPending();
+window.addEventListener('online', trySyncPending);
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {

@@ -7,12 +7,38 @@ lab reports (reference ranges, red/amber out-of-range flags).
 ## Current state (design/UX prototype)
 
 - `index.html` — the whole app: entry form, "latest reading" specimen card,
-  Chart.js trend charts (BP + weight), recent entries list.
+  Chart.js trend charts (BP + weight), recent entries list, and a Sync
+  settings panel.
 - `manifest.json` + `service-worker.js` + `icons/` — makes it installable to
   a phone home screen and usable offline.
-- **Data storage: browser-local only.** Entries are saved via the page's own
-  in-browser storage. There is no backend and no sync between devices yet.
+- `apps-script/Code.gs` — Google Apps Script source for the sync endpoint
+  (see "Google Sheet sync" below). Not deployed automatically — you paste it
+  into your own Sheet's script editor.
+- **Data storage: local-first.** Every entry is saved to the browser's
+  `localStorage` immediately, so the app works fully offline. If sync is
+  configured (see below), each entry is also POSTed to your Google Sheet in
+  the background; unsynced entries are queued and retried automatically when
+  you're back online.
 - Hosted via GitHub Pages from this repo's root (`main` branch).
+
+## Google Sheet sync
+
+Entries can sync to a Google Sheet via a small Apps Script Web App — no
+OAuth consent screen, no client library, just a URL the page POSTs to.
+
+1. Open the target Google Sheet, then **Extensions > Apps Script**.
+2. Paste in the contents of [`apps-script/Code.gs`](apps-script/Code.gs).
+3. Set `SHARED_SECRET` to your own long random string (do not use the
+   placeholder). This is what stops the URL alone from being enough to
+   write data — anyone who finds the endpoint URL still needs the secret.
+4. Make sure a tab named `Entries` exists in the sheet.
+5. **Deploy > New deployment > Web app**, execute as yourself, access set
+   to "Anyone." Authorize when prompted (a one-time, self-only consent).
+6. Copy the deployed `/exec` URL.
+7. In the app, open the "Sync to Google Sheet" panel, paste in the URL and
+   the same secret, and save.
+
+Full details and rotation notes are in the comment header of `Code.gs`.
 
 ## Known gap / next real step
 
@@ -24,9 +50,9 @@ spreadsheet). Candidate directions from here, roughly in order:
 
 1. Add the other tracked metric groups from the main dashboard (currently
    this prototype only handles BP + weight).
-2. Replace local-only storage with real Google Sheets API sync (OAuth setup
-   required — this is the part that couldn't be done inside a sandboxed
-   Claude.ai artifact, which is why this project exists as its own repo).
+2. ~~Replace local-only storage with real Google Sheets sync~~ — done via
+   an Apps Script Web App endpoint (see above); local storage remains the
+   offline-first source of truth with sync as a background best-effort.
 3. Merge this logging UI into the main Chart.js dashboard as a single
    properly deployed page/app, rather than two separate tools.
 4. Retire the AppSheet + Google Sheets logging setup once this replaces it
